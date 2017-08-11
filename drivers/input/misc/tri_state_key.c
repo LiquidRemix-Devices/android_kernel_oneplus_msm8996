@@ -1,3 +1,4 @@
+
 /*
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -96,9 +97,12 @@ static void switch_dev_work(struct work_struct *work)
 	int mode;
 	mutex_lock(&sem);
 
-	if(!gpio_get_value(switch_data->key2_gpio))
+	if(!gpio_get_value(switch_data->key3_gpio))
 	{
-		mode = MODE_DO_NOT_DISTURB;
+		mode = 3;
+		keyCode = keyCode_slider_bottom;
+	} else if(!gpio_get_value(switch_data->key2_gpio)) {
+		mode = 2;
 		keyCode = keyCode_slider_middle;
 	}
 	else if(!gpio_get_value(switch_data->key3_gpio))
@@ -109,6 +113,16 @@ static void switch_dev_work(struct work_struct *work)
 	else if(!gpio_get_value(switch_data->key1_gpio))
 	{
 		mode = MODE_MUTE;
+		keyCode = keyCode_slider_top;
+	}
+	else if(!gpio_get_value(switch_data->key2_gpio))
+	{
+		mode = 2;
+		keyCode = keyCode_slider_middle;
+	}
+	else if(!gpio_get_value(switch_data->key1_gpio))
+	{
+		mode = 1;
 		keyCode = keyCode_slider_top;
 	}
         if (current_mode != mode) {
@@ -197,20 +211,11 @@ switch_dev_get_devtree_pdata(struct device *dev)
 #define SUPPLY_IO_MAX		SUPPLY_1V8
 #define SUPPLY_IO_REQ_CURRENT	6000U
 
-int tristate_regulator_release(void)
+	// Keycode top
+static int keyCode_top_show(struct seq_file *seq, void *offset)
 {
-
-
-
-	if (switch_data->vdd_io != NULL) {
-		regulator_put(switch_data->vdd_io);
-		switch_data->vdd_io = NULL;
-	}
-
-	switch_data->power_enabled = false;
-
-	return 0;
-}
+    seq_printf(seq, "%d\n", keyCode_slider_top);
+    return 0;
 
 int tristate_regulator_set(bool enable)
 {
@@ -345,6 +350,7 @@ const struct file_operations proc_keyCode_top =
 	.release	= single_release,
 };
 
+	// Keycode middle
 static int keyCode_middle_show(struct seq_file *seq, void *offset)
 {
     seq_printf(seq, "%d\n", keyCode_slider_middle);
@@ -389,6 +395,7 @@ const struct file_operations proc_keyCode_middle =
 	.release	= single_release,
 };
 
+	// Keycode bottom
 static int keyCode_bottom_show(struct seq_file *seq, void *offset)
 {
     seq_printf(seq, "%d\n", keyCode_slider_bottom);
@@ -449,40 +456,43 @@ static int tristate_dev_probe(struct platform_device *pdev)
 	switch_data->input->name = DRV_NAME;
 	switch_data->input->dev.parent = &pdev->dev;
 	set_bit(EV_KEY, switch_data->input->evbit);
-	set_bit(MODE_TOTAL_SILENCE, switch_data->input->keybit);
-	set_bit(MODE_ALARMS_ONLY, switch_data->input->keybit);
-	set_bit(MODE_PRIORITY_ONLY, switch_data->input->keybit);
-	set_bit(MODE_NONE, switch_data->input->keybit);
+
+	for (i = KEYCODE_BASE; i < KEYCODE_BASE + TOTAL_KEYCODES; i++)
+	    set_bit(i, switch_data->input->keybit);
 	input_set_drvdata(switch_data->input, switch_data);
 	error = input_register_device(switch_data->input);
 	if (error) {
 		dev_err(dev, "Failed to register input device\n");
 		goto err_input_device_register;
 	}
-        #if 0
-	    switch_data->key_pinctrl = devm_pinctrl_get(switch_data->dev);
-         if (IS_ERR_OR_NULL(switch_data->key_pinctrl)) {
-		        dev_err(switch_data->dev, "Failed to get pinctrl \n");
-		        goto err_switch_dev_register;
-	     }
-         switch_data->set_state =pinctrl_lookup_state(switch_data->key_pinctrl,"pmx_tri_state_key_active");
-         if (IS_ERR_OR_NULL(switch_data->set_state)) {
-		        dev_err(switch_data->dev, "Failed to lookup_state \n");
-		        goto err_switch_dev_register;
-	     }
 
-	     set_gpio_by_pinctrl();
-		#endif
-        //switch_data->last_type = MODE_UNKNOWN;
+	// init pinctrl
 
-        //tristate_supply_init();
-		error = switch_dev_get_devtree_pdata(dev);
-		if (error) {
-			dev_err(dev, "parse device tree fail!!!\n");
-			goto err_switch_dev_register;
-		}
+	switch_data->key_pinctrl = devm_pinctrl_get(switch_data->dev);
+	if (IS_ERR_OR_NULL(switch_data->key_pinctrl)) {
+		dev_err(dev, "Failed to get pinctrl\n");
+		goto err_switch_dev_register;
+	}
 
-		//config irq gpio and request irq
+	switch_data->set_state = pinctrl_lookup_state(switch_data->key_pinctrl,
+		"pmx_tri_state_key_active");
+	if (IS_ERR_OR_NULL(switch_data->set_state)) {
+		dev_err(dev, "Failed to lookup_state\n");
+		goto err_switch_dev_register;
+	}
+
+	pinctrl_select_state(switch_data->key_pinctrl, switch_data->set_state);
+
+	// parse gpios from dt
+
+	error = switch_dev_get_devtree_pdata(dev);
+	if (error) {
+		dev_err(dev, "parse device tree fail!!!\n");
+		goto err_switch_dev_register;
+	}
+
+	// irqs and work, timer stuffs
+	//config irq gpio and request irq
 	switch_data->irq_key1 = gpio_to_irq(switch_data->key1_gpio);
        if (switch_data->irq_key1 <= 0)
        {
@@ -516,7 +526,7 @@ static int tristate_dev_probe(struct platform_device *pdev)
         		goto err_request_irq;
             }
        }
-       //config irq gpio and request irq
+
 	 switch_data->irq_key2 = gpio_to_irq(switch_data->key2_gpio);
        if (switch_data->irq_key2 <= 0)
        {
@@ -574,7 +584,6 @@ static int tristate_dev_probe(struct platform_device *pdev)
         		goto err_set_gpio_input;
         	}
 
-
 			error = request_irq(switch_data->irq_key3, switch_dev_interrupt,
 			    IRQF_TRIGGER_FALLING, "tristate_key3", switch_data);
 
@@ -588,29 +597,28 @@ static int tristate_dev_probe(struct platform_device *pdev)
             }
 
        }
+	INIT_WORK(&switch_data->work, switch_dev_work);
 
+	init_timer(&switch_data->s_timer);
+	switch_data->s_timer.function = &timer_handle;
+	switch_data->s_timer.expires = jiffies + 5*HZ;
 
-        INIT_WORK(&switch_data->work, switch_dev_work);
+	add_timer(&switch_data->s_timer);
 
-        init_timer(&switch_data->s_timer);
-        switch_data->s_timer.function = &timer_handle;
-        switch_data->s_timer.expires = jiffies + 5*HZ;
+	enable_irq_wake(switch_data->irq_key1);
+	enable_irq_wake(switch_data->irq_key2);
+	enable_irq_wake(switch_data->irq_key3);
 
-        add_timer(&switch_data->s_timer);
+	// init switch device
 
-        enable_irq_wake(switch_data->irq_key1);
-        enable_irq_wake(switch_data->irq_key2);
-	    enable_irq_wake(switch_data->irq_key3);
+	switch_data->sdev.name = DRV_NAME;
+	error = switch_dev_register(&switch_data->sdev);
+	if (error < 0) {
+		dev_err(dev, "Failed to register switch dev\n");
+		goto err_request_gpio;
+	}
 
-
-        switch_data->sdev.name = DRV_NAME;
-       	error = switch_dev_register(&switch_data->sdev);
-	    if (error < 0)
-		    goto err_request_gpio;
-		 //set_gpio_by_pinctrl();
-        //report the first switch
-        //switch_dev_work(&switch_data->work);
-
+	// init proc fs
 	procdir = proc_mkdir("tri-state-key", NULL);
 	proc_create_data("keyCode_top", 0666, procdir, &proc_keyCode_top, NULL);
 	proc_create_data("keyCode_middle", 0666, procdir, &proc_keyCode_middle, NULL);
